@@ -467,6 +467,52 @@ class GestorGastos:
 
     def _crear_exportacion(self) -> None:
         pass
+
+    @staticmethod
+    def _validar_fecha(fecha: str) -> bool:
+        try:
+            dt.datetime.strptime(fecha, "%d/%m/%Y")
+            return True
+        except ValueError:
+            return False
+
+    def _mostrar_error(self, mensaje: str) -> None:
+        messagebox.showerror("Error", mensaje)
+
+    def _limpiar_campos(self) -> None:
+        for entry in [
+            *self.entries_factura,
+            self.entry_semana,
+            self.entry_monto_mano_usd,
+            self.entry_gastos_extras_usd,
+        ]:
+            entry.config(state="normal")
+            entry.delete(0, tk.END)
+
+        self.registro_en_edicion = None
+        self.combo_modo.set("Factura")
+        self._aplicar_estado_por_modo()
+        self.btn_agregar.config(text="Agregar gasto")
+
+    def _cancelar_edicion(self) -> None:
+        self._limpiar_campos()
+
+    def _limpiar_lista(self) -> None:
+        if not self.registros:
+            return
+
+        if messagebox.askyesno(
+            "Confirmar",
+            "Esto eliminará todos los registros de este proyecto. ¿Deseas continuar?",
+        ):
+            self.registros.clear()
+            self._guardar_datos()
+            self._limpiar_campos()
+            self._refrescar_tabla()
+
+    def _recalcular_items(self) -> None:
+        for idx, registro in enumerate(self.registros, start=1):
+            registro.item = idx
     # ============================================
     #                 FILTROS
     # ============================================
@@ -565,6 +611,27 @@ class GestorGastos:
         except:
             return pd.DataFrame()
 
+    def _cargar_datos_proyecto(self) -> None:
+        self.registros.clear()
+
+        if self._df_global.empty:
+            return
+
+        if "Proyecto" in self._df_global.columns:
+            df_proj = self._df_global[self._df_global["Proyecto"] == self.proyecto]
+        else:
+            df_proj = pd.DataFrame()
+
+        if df_proj.empty:
+            self._recalcular_items()
+            return
+
+        for _, fila in df_proj.iterrows():
+            registro = RegistroGasto.from_dict(fila.to_dict())
+            self.registros.append(registro)
+
+        self._recalcular_items()
+
     def _guardar_datos(self) -> None:
         df_nuevo = pd.DataFrame([asdict(r) for r in self.registros])
 
@@ -602,6 +669,203 @@ class GestorGastos:
             self._df_global = df_final
         except Exception as e:
             self._mostrar_error(f"No se pudo guardar el archivo: {e}")
+
+    def _set_dolar(self) -> None:
+        try:
+            self.precio_dolar = float(self.entry_dolar.get())
+        except ValueError:
+            self._mostrar_error("Ingresa un valor numérico válido para el dólar.")
+            return
+
+        messagebox.showinfo("Éxito", f"Precio del dólar actualizado a Bs. {self.precio_dolar}")
+
+        for registro in self.registros:
+            if registro.precio_sin_iva_bs:
+                registro.precio_sin_iva_usd = (
+                    round(registro.precio_sin_iva_bs / self.precio_dolar, 2)
+                    if self.precio_dolar > 0
+                    else 0.0
+                )
+
+            if registro.precio_con_iva_bs:
+                registro.precio_con_iva_usd = (
+                    round(registro.precio_con_iva_bs / self.precio_dolar, 2)
+                    if self.precio_dolar > 0
+                    else 0.0
+                )
+
+        self._refrescar_tabla()
+
+    def _agregar_o_actualizar(self) -> None:
+        modo = self.combo_modo.get()
+
+        if not self.entry_desc.get().strip():
+            self._mostrar_error("La descripción es obligatoria.")
+            return
+
+        fecha_texto = self.entry_fecha.get().strip()
+        if fecha_texto and not self._validar_fecha(fecha_texto):
+            self._mostrar_error("Formato de fecha inválido. Use DD/MM/YYYY")
+            return
+
+        if modo == "Factura":
+            if self.precio_dolar <= 0:
+                messagebox.showwarning("Atención", "Primero ingresa el precio del dólar del día.")
+                return
+
+            campos = [
+                self.entry_factura,
+                self.entry_unidad,
+                self.entry_cantidad,
+                self.entry_precio_sin_iva,
+                self.entry_precio_con_iva,
+                self.entry_fecha,
+                self.entry_proveedor,
+            ]
+
+            if any(not c.get().strip() for c in campos):
+                self._mostrar_error("Todos los campos de factura son obligatorios.")
+                return
+
+            try:
+                cantidad = float(self.entry_cantidad.get())
+                precio_sin = float(self.entry_precio_sin_iva.get())
+                precio_con = float(self.entry_precio_con_iva.get())
+            except ValueError:
+                self._mostrar_error("Verifica números (cantidad/precios).")
+                return
+
+            precio_sin_usd = round(precio_sin / self.precio_dolar, 2) if self.precio_dolar > 0 else 0.0
+            precio_con_usd = round(precio_con / self.precio_dolar, 2) if self.precio_dolar > 0 else 0.0
+            total_sin = round(precio_sin * cantidad, 2)
+
+            registro = RegistroGasto(
+                item=len(self.registros) + 1,
+                tipo="Factura",
+                factura=self.entry_factura.get(),
+                descripcion=self.entry_desc.get(),
+                unidad=self.entry_unidad.get(),
+                cantidad=cantidad,
+                precio_sin_iva_bs=precio_sin,
+                precio_con_iva_bs=precio_con,
+                precio_sin_iva_usd=precio_sin_usd,
+                precio_con_iva_usd=precio_con_usd,
+                fecha=fecha_texto,
+                total_sin_iva=total_sin,
+                proveedor=self.entry_proveedor.get(),
+                proyecto=self.proyecto,
+            )
+        else:
+            if not self.entry_semana.get().strip():
+                self._mostrar_error("La semana es obligatoria para mano de obra.")
+                return
+
+            try:
+                monto_mano = float(self.entry_monto_mano_usd.get() or 0)
+                gastos_extra = float(self.entry_gastos_extras_usd.get() or 0)
+            except ValueError:
+                self._mostrar_error("Verifica números en monto de mano de obra y gastos extras.")
+                return
+
+            registro = RegistroGasto(
+                item=len(self.registros) + 1,
+                tipo="Mano de obra",
+                factura=self.entry_factura.get(),
+                descripcion=self.entry_desc.get(),
+                unidad=self.entry_unidad.get(),
+                cantidad=float(self.entry_cantidad.get() or 0),
+                precio_sin_iva_bs=0,
+                precio_con_iva_bs=0,
+                precio_sin_iva_usd=0,
+                precio_con_iva_usd=0,
+                fecha=fecha_texto,
+                total_sin_iva=0,
+                proveedor=self.entry_proveedor.get(),
+                proyecto=self.proyecto,
+                semana=self.entry_semana.get(),
+                monto_manoobra_usd=monto_mano,
+                gastos_extras_usd=gastos_extra,
+            )
+
+        if self.registro_en_edicion is not None:
+            registro.item = self.registro_en_edicion + 1
+            self.registros[self.registro_en_edicion] = registro
+        else:
+            self.registros.append(registro)
+
+        self._recalcular_items()
+        self._guardar_datos()
+        self._limpiar_campos()
+        self._refrescar_tabla()
+
+    def _eliminar_gasto(self) -> None:
+        seleccion = self.tabla.selection()
+        if not seleccion:
+            messagebox.showwarning("Atención", "Selecciona al menos un registro para eliminar.")
+            return
+
+        indices = [self.tabla.index(i) for i in seleccion]
+
+        if messagebox.askyesno("Confirmar", "¿Seguro que deseas eliminar los registros seleccionados?"):
+            for idx in sorted(indices, reverse=True):
+                try:
+                    self.registros.pop(idx)
+                except IndexError:
+                    continue
+
+            self._recalcular_items()
+            self._guardar_datos()
+            self._refrescar_tabla()
+
+    def _iniciar_edicion(self, _event) -> None:
+        item_sel = self.tabla.selection()
+        if not item_sel:
+            return
+
+        idx = self.tabla.index(item_sel[0])
+        try:
+            registro = self.registros[idx]
+        except IndexError:
+            return
+
+        self.registro_en_edicion = idx
+        self.combo_modo.set(registro.tipo)
+        self._aplicar_estado_por_modo()
+
+        self.entry_factura.delete(0, tk.END)
+        self.entry_factura.insert(0, registro.factura)
+
+        self.entry_desc.delete(0, tk.END)
+        self.entry_desc.insert(0, registro.descripcion)
+
+        self.entry_unidad.delete(0, tk.END)
+        self.entry_unidad.insert(0, registro.unidad)
+
+        self.entry_cantidad.delete(0, tk.END)
+        self.entry_cantidad.insert(0, str(registro.cantidad))
+
+        self.entry_precio_sin_iva.delete(0, tk.END)
+        self.entry_precio_sin_iva.insert(0, str(registro.precio_sin_iva_bs))
+
+        self.entry_precio_con_iva.delete(0, tk.END)
+        self.entry_precio_con_iva.insert(0, str(registro.precio_con_iva_bs))
+
+        self.entry_fecha.delete(0, tk.END)
+        self.entry_fecha.insert(0, registro.fecha)
+
+        self.entry_proveedor.delete(0, tk.END)
+        self.entry_proveedor.insert(0, registro.proveedor)
+
+        self.entry_semana.delete(0, tk.END)
+        self.entry_semana.insert(0, registro.semana)
+
+        self.entry_monto_mano_usd.delete(0, tk.END)
+        self.entry_monto_mano_usd.insert(0, str(registro.monto_manoobra_usd))
+
+        self.entry_gastos_extras_usd.delete(0, tk.END)
+        self.entry_gastos_extras_usd.insert(0, str(registro.gastos_extras_usd))
+
+        self.btn_agregar.config(text="Actualizar registro")
 
     # ============================================
     #             EXPORTACIÓN A EXCEL
