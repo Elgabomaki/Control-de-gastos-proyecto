@@ -24,6 +24,7 @@ from typing import List, Optional
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 
 ARCHIVO_DATOS = "gastos_guardados.xlsx"
 IVA = 0.16
@@ -966,9 +967,9 @@ class GestorGastos:
                 c.alignment = Alignment(horizontal="center")
 
         # Ajuste de columnas
-        for col in ws.columns:
+        for idx, col in enumerate(ws.columns, start=1):
             max_len = max(len(str(c.value)) if c.value else 0 for c in col)
-            ws.column_dimensions[col[0].column_letter].width = max_len + 3
+            ws.column_dimensions[get_column_letter(idx)].width = max_len + 3
 
         wb.save(archivo)
         wb.close()
