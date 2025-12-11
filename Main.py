@@ -141,6 +141,7 @@ class GestorGastos:
         self.dolar_por_fecha: dict[str, float] = {}
         self.registro_en_edicion: Optional[int] = None
         self.proyecto: str = ""
+        self.mostrar_solo_mano: bool = False
 
         self.root = tk.Tk()
         self.root.title("Control de Gastos - Terra Caliza")
@@ -378,6 +379,8 @@ class GestorGastos:
         modo = self.combo_modo.get()
         es_mano = modo == "Mano de obra"
 
+        self.mostrar_solo_mano = es_mano
+
         # Factura: ocultar si es mano de obra
         for label, entry in zip(self.labels_factura_widgets, self.entries_factura):
             if es_mano:
@@ -398,6 +401,8 @@ class GestorGastos:
             else:
                 label.grid_remove()
                 entry.grid_remove()
+
+        self._refrescar_tabla()
 
     # ============================================
     #             CONTROLES DE TABLA
@@ -594,6 +599,7 @@ class GestorGastos:
 
     def _refrescar_tabla(self, registros=None) -> None:
         registros = registros if registros is not None else self.registros
+        registros = self._filtrar_por_modo(registros)
 
         for row in self.tabla.get_children():
             self.tabla.delete(row)
@@ -602,6 +608,11 @@ class GestorGastos:
             self.tabla.insert("", "end", values=r.to_row())
 
         self._actualizar_resumen(registros)
+
+    def _filtrar_por_modo(self, registros: List[RegistroGasto]) -> List[RegistroGasto]:
+        if self.mostrar_solo_mano:
+            return [r for r in registros if r.tipo == "Mano de obra"]
+        return registros
 
     def _actualizar_resumen(self, registros) -> None:
         total_bs = sum(r.precio_con_iva_bs * (r.cantidad if r.cantidad else 1) for r in registros)
@@ -740,6 +751,10 @@ class GestorGastos:
                 if registro.precio_con_iva_bs:
                     registro.precio_con_iva_usd = round(registro.precio_con_iva_bs / valor, 2)
 
+
+                if registro.precio_con_iva_bs:
+                    registro.precio_con_iva_usd = round(registro.precio_con_iva_bs / valor, 2)
+
                 registro.precio_dolar_bs = valor
 
         self._guardar_datos()
@@ -748,7 +763,7 @@ class GestorGastos:
     def _agregar_o_actualizar(self) -> None:
         modo = self.combo_modo.get()
 
-        if not self.entry_desc.get().strip():
+        if modo == "Factura" and not self.entry_desc.get().strip():
             self._mostrar_error("La descripción es obligatoria.")
             return
 
@@ -761,6 +776,11 @@ class GestorGastos:
         if modo == "Factura" and not fecha_texto:
             self._mostrar_error("La fecha es obligatoria para facturas.")
             return
+
+        if modo == "Factura" and precio_dolar_fecha is None:
+            self._mostrar_error("No hay un precio del dólar guardado para esa fecha. Ingrésalo en la sección superior.")
+            return
+
 
         if modo == "Factura" and precio_dolar_fecha is None:
             self._mostrar_error("No hay un precio del dólar guardado para esa fecha. Ingrésalo en la sección superior.")
