@@ -15,6 +15,7 @@ Modificaciones solicitadas:
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 import tkinter as tk
 from dataclasses import dataclass, asdict
@@ -27,6 +28,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 ARCHIVO_DATOS = "gastos_guardados.xlsx"
+ARCHIVO_DOLAR = "dolares_por_fecha.json"
 IVA = 0.16
 
 COLUMNAS = [
@@ -41,6 +43,7 @@ COLUMNAS = [
     "Precio sin IVA ($)",
     "Precio con IVA ($)",
     "Fecha",
+    "Precio dólar (Bs)",
     "Total sin IVA (Bs)",
     "Proveedor",
     "Semana",
@@ -66,6 +69,7 @@ class RegistroGasto:
     precio_sin_iva_usd: float
     precio_con_iva_usd: float
     fecha: str
+    precio_dolar_bs: float
     total_sin_iva: float
     proveedor: str
     proyecto: str
@@ -81,6 +85,7 @@ class RegistroGasto:
         precio_con_usd = float(data.get("Precio con IVA ($)") or precio_sin_usd)
         cantidad = float(data.get("Cantidad", 0) or 0)
         total_sin = float(data.get("Total sin IVA (Bs)") or (precio_sin_bs * cantidad))
+        precio_dolar_bs = float(data.get("Precio dólar (Bs)") or 0)
 
         return cls(
             item=int(data.get("Item", 0)),
@@ -94,6 +99,7 @@ class RegistroGasto:
             precio_sin_iva_usd=precio_sin_usd,
             precio_con_iva_usd=precio_con_usd,
             fecha=str(data.get("Fecha", "")),
+            precio_dolar_bs=precio_dolar_bs,
             total_sin_iva=total_sin,
             proveedor=str(data.get("Proveedor", "")),
             proyecto=str(data.get("Proyecto", "")),
@@ -115,6 +121,7 @@ class RegistroGasto:
             self.precio_sin_iva_usd,
             self.precio_con_iva_usd,
             self.fecha,
+            self.precio_dolar_bs,
             self.total_sin_iva,
             self.proveedor,
             self.semana,
@@ -131,8 +138,10 @@ class GestorGastos:
     def __init__(self) -> None:
         self.registros: List[RegistroGasto] = []
         self.precio_dolar: float = 0.0
+        self.dolar_por_fecha: dict[str, float] = {}
         self.registro_en_edicion: Optional[int] = None
         self.proyecto: str = ""
+        self.mostrar_solo_mano: bool = False
 
         self.root = tk.Tk()
         self.root.title("Control de Gastos - Terra Caliza")
@@ -148,6 +157,7 @@ class GestorGastos:
         self._crear_contenedor_scrollable()
 
         self._df_global = self._leer_archivo_datos()
+        self.dolar_por_fecha = self._leer_dolar_por_fecha()
 
         # Selección de proyecto antes de cargar la UI
         self._seleccionar_proyecto_modal()
@@ -217,6 +227,10 @@ class GestorGastos:
     def _crear_frame_dolar(self) -> None:
         frame = ttk.LabelFrame(self.content_frame, text="Precio del dólar del día")
         frame.pack(fill="x", padx=10, pady=6)
+
+        ttk.Label(frame, text="Fecha (DD/MM/YYYY):").pack(side=tk.LEFT, padx=6)
+        self.entry_fecha_dolar = ttk.Entry(frame, width=14)
+        self.entry_fecha_dolar.pack(side=tk.LEFT)
 
         ttk.Label(frame, text="Precio (Bs):").pack(side=tk.LEFT, padx=6)
         self.entry_dolar = ttk.Entry(frame, width=12)
@@ -365,6 +379,8 @@ class GestorGastos:
         modo = self.combo_modo.get()
         es_mano = modo == "Mano de obra"
 
+        self.mostrar_solo_mano = es_mano
+
         # Factura: ocultar si es mano de obra
         for label, entry in zip(self.labels_factura_widgets, self.entries_factura):
             if es_mano:
@@ -385,6 +401,8 @@ class GestorGastos:
             else:
                 label.grid_remove()
                 entry.grid_remove()
+
+        self._refrescar_tabla()
 
     # ============================================
     #             CONTROLES DE TABLA
@@ -581,6 +599,7 @@ class GestorGastos:
 
     def _refrescar_tabla(self, registros=None) -> None:
         registros = registros if registros is not None else self.registros
+        registros = self._filtrar_por_modo(registros)
 
         for row in self.tabla.get_children():
             self.tabla.delete(row)
@@ -589,6 +608,11 @@ class GestorGastos:
             self.tabla.insert("", "end", values=r.to_row())
 
         self._actualizar_resumen(registros)
+
+    def _filtrar_por_modo(self, registros: List[RegistroGasto]) -> List[RegistroGasto]:
+        if self.mostrar_solo_mano:
+            return [r for r in registros if r.tipo == "Mano de obra"]
+        return registros
 
     def _actualizar_resumen(self, registros) -> None:
         total_bs = sum(r.precio_con_iva_bs * (r.cantidad if r.cantidad else 1) for r in registros)
@@ -612,6 +636,16 @@ class GestorGastos:
         except:
             return pd.DataFrame()
 
+    def _leer_dolar_por_fecha(self) -> dict[str, float]:
+        if not os.path.exists(ARCHIVO_DOLAR):
+            return {}
+        try:
+            with open(ARCHIVO_DOLAR, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return {str(k): float(v) for k, v in data.items()}
+        except Exception:
+            return {}
+
     def _cargar_datos_proyecto(self) -> None:
         self.registros.clear()
 
@@ -630,6 +664,8 @@ class GestorGastos:
         for _, fila in df_proj.iterrows():
             registro = RegistroGasto.from_dict(fila.to_dict())
             self.registros.append(registro)
+            if registro.fecha and registro.precio_dolar_bs:
+                self.dolar_por_fecha.setdefault(registro.fecha, registro.precio_dolar_bs)
 
         self._recalcular_items()
 
@@ -648,6 +684,7 @@ class GestorGastos:
             "precio_sin_iva_usd": "Precio sin IVA ($)",
             "precio_con_iva_usd": "Precio con IVA ($)",
             "fecha": "Fecha",
+            "precio_dolar_bs": "Precio dólar (Bs)",
             "total_sin_iva": "Total sin IVA (Bs)",
             "proveedor": "Proveedor",
             "proyecto": "Proyecto",
@@ -671,36 +708,58 @@ class GestorGastos:
         except Exception as e:
             self._mostrar_error(f"No se pudo guardar el archivo: {e}")
 
+    def _guardar_dolar_por_fecha(self) -> None:
+        try:
+            with open(ARCHIVO_DOLAR, "w", encoding="utf-8") as f:
+                json.dump(self.dolar_por_fecha, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            self._mostrar_error(f"No se pudo guardar el historial del dólar: {e}")
+
     def _set_dolar(self) -> None:
+        fecha_texto = self.entry_fecha_dolar.get().strip()
+        if not fecha_texto:
+            self._mostrar_error("Ingresa la fecha para asociar el precio del dólar.")
+            return
+
+        if not self._validar_fecha(fecha_texto):
+            self._mostrar_error("Formato de fecha inválido. Use DD/MM/YYYY")
+            return
+
         try:
             self.precio_dolar = float(self.entry_dolar.get())
         except ValueError:
             self._mostrar_error("Ingresa un valor numérico válido para el dólar.")
             return
 
-        messagebox.showinfo("Éxito", f"Precio del dólar actualizado a Bs. {self.precio_dolar}")
+        self.dolar_por_fecha[fecha_texto] = self.precio_dolar
+        self._guardar_dolar_por_fecha()
+
+        messagebox.showinfo("Éxito", f"Precio del dólar para {fecha_texto} guardado: Bs. {self.precio_dolar}")
+
+        self._actualizar_registros_con_dolar(fecha_texto)
+
+    def _actualizar_registros_con_dolar(self, fecha_objetivo: str) -> None:
+        valor = self.dolar_por_fecha.get(fecha_objetivo)
+        if valor is None:
+            return
 
         for registro in self.registros:
-            if registro.precio_sin_iva_bs:
-                registro.precio_sin_iva_usd = (
-                    round(registro.precio_sin_iva_bs / self.precio_dolar, 2)
-                    if self.precio_dolar > 0
-                    else 0.0
-                )
+            if registro.fecha == fecha_objetivo and registro.tipo == "Factura":
+                if registro.precio_sin_iva_bs:
+                    registro.precio_sin_iva_usd = round(registro.precio_sin_iva_bs / valor, 2)
 
-            if registro.precio_con_iva_bs:
-                registro.precio_con_iva_usd = (
-                    round(registro.precio_con_iva_bs / self.precio_dolar, 2)
-                    if self.precio_dolar > 0
-                    else 0.0
-                )
+                if registro.precio_con_iva_bs:
+                    registro.precio_con_iva_usd = round(registro.precio_con_iva_bs / valor, 2)
 
+                registro.precio_dolar_bs = valor
+
+        self._guardar_datos()
         self._refrescar_tabla()
 
     def _agregar_o_actualizar(self) -> None:
         modo = self.combo_modo.get()
 
-        if not self.entry_desc.get().strip():
+        if modo == "Factura" and not self.entry_desc.get().strip():
             self._mostrar_error("La descripción es obligatoria.")
             return
 
@@ -709,11 +768,16 @@ class GestorGastos:
             self._mostrar_error("Formato de fecha inválido. Use DD/MM/YYYY")
             return
 
-        if modo == "Factura":
-            if self.precio_dolar <= 0:
-                messagebox.showwarning("Atención", "Primero ingresa el precio del dólar del día.")
-                return
+        precio_dolar_fecha = self.dolar_por_fecha.get(fecha_texto)
+        if modo == "Factura" and not fecha_texto:
+            self._mostrar_error("La fecha es obligatoria para facturas.")
+            return
 
+        if modo == "Factura" and precio_dolar_fecha is None:
+            self._mostrar_error("No hay un precio del dólar guardado para esa fecha. Ingrésalo en la sección superior.")
+            return
+
+        if modo == "Factura":
             campos = [
                 self.entry_factura,
                 self.entry_unidad,
@@ -736,8 +800,8 @@ class GestorGastos:
                 self._mostrar_error("Verifica números (cantidad/precios).")
                 return
 
-            precio_sin_usd = round(precio_sin / self.precio_dolar, 2) if self.precio_dolar > 0 else 0.0
-            precio_con_usd = round(precio_con / self.precio_dolar, 2) if self.precio_dolar > 0 else 0.0
+            precio_sin_usd = round(precio_sin / precio_dolar_fecha, 2) if precio_dolar_fecha else 0.0
+            precio_con_usd = round(precio_con / precio_dolar_fecha, 2) if precio_dolar_fecha else 0.0
             total_sin = round(precio_sin * cantidad, 2)
 
             registro = RegistroGasto(
@@ -752,6 +816,7 @@ class GestorGastos:
                 precio_sin_iva_usd=precio_sin_usd,
                 precio_con_iva_usd=precio_con_usd,
                 fecha=fecha_texto,
+                precio_dolar_bs=precio_dolar_fecha or 0.0,
                 total_sin_iva=total_sin,
                 proveedor=self.entry_proveedor.get(),
                 proyecto=self.proyecto,
@@ -780,6 +845,7 @@ class GestorGastos:
                 precio_sin_iva_usd=0,
                 precio_con_iva_usd=0,
                 fecha=fecha_texto,
+                precio_dolar_bs=0.0,
                 total_sin_iva=0,
                 proveedor=self.entry_proveedor.get(),
                 proyecto=self.proyecto,
