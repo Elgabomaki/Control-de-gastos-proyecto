@@ -751,6 +751,10 @@ class GestorGastos:
                 if registro.precio_con_iva_bs:
                     registro.precio_con_iva_usd = round(registro.precio_con_iva_bs / valor, 2)
 
+
+                if registro.precio_con_iva_bs:
+                    registro.precio_con_iva_usd = round(registro.precio_con_iva_bs / valor, 2)
+
                 registro.precio_dolar_bs = valor
 
         self._guardar_datos()
@@ -772,6 +776,11 @@ class GestorGastos:
         if modo == "Factura" and not fecha_texto:
             self._mostrar_error("La fecha es obligatoria para facturas.")
             return
+
+        if modo == "Factura" and precio_dolar_fecha is None:
+            self._mostrar_error("No hay un precio del dólar guardado para esa fecha. Ingrésalo en la sección superior.")
+            return
+
 
         if modo == "Factura" and precio_dolar_fecha is None:
             self._mostrar_error("No hay un precio del dólar guardado para esa fecha. Ingrésalo en la sección superior.")
