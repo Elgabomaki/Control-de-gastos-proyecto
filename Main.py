@@ -22,6 +22,8 @@ from dataclasses import dataclass, asdict
 from tkinter import filedialog, messagebox, ttk
 from typing import List, Optional
 
+import requests
+
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -232,12 +234,19 @@ class GestorGastos:
         self.entry_fecha_dolar = ttk.Entry(frame, width=14)
         self.entry_fecha_dolar.pack(side=tk.LEFT)
 
+        if not self.entry_fecha_dolar.get().strip():
+            self.entry_fecha_dolar.insert(0, dt.datetime.now().strftime("%d/%m/%Y"))
+
         ttk.Label(frame, text="Precio (Bs):").pack(side=tk.LEFT, padx=6)
         self.entry_dolar = ttk.Entry(frame, width=12)
         self.entry_dolar.pack(side=tk.LEFT)
 
         ttk.Button(frame, text="Actualizar", style="Primary.TButton", command=self._set_dolar).pack(
             side=tk.LEFT, padx=6
+        )
+        ttk.Button(frame, text="BCV Hoy", command=self._obtener_dolar_bcv_hoy).pack(side=tk.LEFT, padx=4)
+        ttk.Button(frame, text="BCV por fecha", command=self._obtener_dolar_bcv_por_fecha).pack(
+            side=tk.LEFT, padx=4
         )
 
         self.label_proyecto = ttk.Label(frame, text=f"Proyecto: {self.proyecto}", style="Header.TLabel")
@@ -714,6 +723,70 @@ class GestorGastos:
                 json.dump(self.dolar_por_fecha, f, ensure_ascii=False, indent=2)
         except Exception as e:
             self._mostrar_error(f"No se pudo guardar el historial del dólar: {e}")
+
+    def _fecha_ddmmyyyy_a_yyyymmdd(self, fecha_ddmmyyyy: str) -> str:
+        try:
+            fecha = dt.datetime.strptime(fecha_ddmmyyyy.strip(), "%d/%m/%Y")
+            return fecha.strftime("%Y-%m-%d")
+        except ValueError:
+            raise ValueError(f"Fecha inválida: {fecha_ddmmyyyy}. Usa formato DD/MM/YYYY.")
+
+    def _extraer_usd_de_json(self, data: dict) -> float:
+        if isinstance(data, dict):
+            if isinstance(data.get("rates"), dict) and "USD" in data["rates"]:
+                try:
+                    return float(data["rates"]["USD"])
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"Valor USD inválido en la respuesta del BCV: {exc}")
+
+            if "USD" in data:
+                try:
+                    return float(data["USD"])
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"Valor USD inválido en la respuesta del BCV: {exc}")
+
+            if isinstance(data.get("data"), dict):
+                data_section = data["data"]
+                if isinstance(data_section.get("rates"), dict) and "USD" in data_section["rates"]:
+                    try:
+                        return float(data_section["rates"]["USD"])
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(f"Valor USD inválido en la respuesta del BCV: {exc}")
+
+        raise KeyError("No se encontró la tasa USD en la respuesta del BCV.")
+
+    def _obtener_dolar_bcv_hoy(self) -> None:
+        try:
+            response = requests.get("https://bcv-api.rafnixg.dev/rates/", timeout=10)
+            response.raise_for_status()
+            usd = self._extraer_usd_de_json(response.json())
+
+            fecha_hoy = dt.datetime.now().strftime("%d/%m/%Y")
+            self.entry_fecha_dolar.delete(0, tk.END)
+            self.entry_fecha_dolar.insert(0, fecha_hoy)
+
+            self.entry_dolar.delete(0, tk.END)
+            self.entry_dolar.insert(0, str(usd))
+
+            self._set_dolar()
+        except Exception as exc:
+            messagebox.showwarning("Advertencia", f"No se pudo obtener el dólar BCV: {exc}")
+
+    def _obtener_dolar_bcv_por_fecha(self) -> None:
+        fecha_texto = self.entry_fecha_dolar.get().strip()
+
+        try:
+            fecha_formateada = self._fecha_ddmmyyyy_a_yyyymmdd(fecha_texto)
+            response = requests.get(f"https://bcv-api.rafnixg.dev/rates/{fecha_formateada}", timeout=10)
+            response.raise_for_status()
+            usd = self._extraer_usd_de_json(response.json())
+
+            self.entry_dolar.delete(0, tk.END)
+            self.entry_dolar.insert(0, str(usd))
+
+            self._set_dolar()
+        except Exception as exc:
+            messagebox.showwarning("Advertencia", f"No se pudo obtener el dólar BCV: {exc}")
 
     def _set_dolar(self) -> None:
         fecha_texto = self.entry_fecha_dolar.get().strip()
