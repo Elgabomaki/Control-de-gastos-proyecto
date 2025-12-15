@@ -411,6 +411,9 @@ class GestorGastos:
                 label.grid_remove()
                 entry.grid_remove()
 
+        if self.tabla is not None:
+            self._refrescar_tabla()
+
         self._refrescar_tabla()
 
     # ============================================
@@ -617,6 +620,11 @@ class GestorGastos:
             self.tabla.insert("", "end", values=r.to_row())
 
         self._actualizar_resumen(registros)
+
+    def _filtrar_por_modo(self, registros: List[RegistroGasto]) -> List[RegistroGasto]:
+        if self.mostrar_solo_mano:
+            return [r for r in registros if r.tipo == "Mano de obra"]
+        return registros
 
     def _filtrar_por_modo(self, registros: List[RegistroGasto]) -> List[RegistroGasto]:
         if self.mostrar_solo_mano:
