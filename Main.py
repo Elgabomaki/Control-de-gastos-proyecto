@@ -650,11 +650,11 @@ class GestorGastos:
     # ============================================
 
     def _leer_archivo_datos(self) -> pd.DataFrame:
-        if not os.path.exists(ARCHIVO_DATOS):
+        if not os.path.exists(self.archivo_datos):
             return pd.DataFrame()
         try:
-            return pd.read_excel(ARCHIVO_DATOS)
-        except:
+            return pd.read_excel(self.archivo_datos)
+        except Exception:
             return pd.DataFrame()
 
     def _leer_dolar_por_fecha(self) -> dict[str, float]:
@@ -1140,25 +1140,63 @@ class GestorGastos:
     # ============================================
 
     def _seleccionar_proyecto_modal(self) -> None:
-        proyectos = []
-        if hasattr(self, "_df_global") and not self._df_global.empty and "Proyecto" in self._df_global.columns:
-            proyectos = sorted(self._df_global["Proyecto"].dropna().unique().tolist())
-
         modal = tk.Toplevel(self.root)
         modal.title("Seleccionar proyecto")
-        modal.geometry("360x150")
+        modal.geometry("420x220")
         modal.transient(self.root)
         modal.grab_set()
 
+        label_archivo = ttk.Label(modal, text=f"Archivo datos: {os.path.basename(self.archivo_datos)}")
+        label_archivo.pack(anchor="w", padx=10, pady=(8, 4))
+
+        def actualizar_proyectos() -> None:
+            proyectos_local: list[str] = []
+            if hasattr(self, "_df_global") and not self._df_global.empty and "Proyecto" in self._df_global.columns:
+                proyectos_local = sorted(self._df_global["Proyecto"].dropna().unique().tolist())
+            combo.config(values=proyectos_local, state="readonly" if proyectos_local else "normal")
+            if proyectos_local:
+                combo.set(proyectos_local[0])
+            else:
+                combo.set("")
+
+        def buscar_archivo() -> None:
+            archivo = filedialog.askopenfilename(
+                title="Seleccionar archivo de datos",
+                filetypes=[("Excel", "*.xlsx"), ("Todos", "*.*")],
+            )
+            if not archivo:
+                return
+            anterior = self.archivo_datos
+            self.archivo_datos = archivo
+            self._df_global = self._leer_archivo_datos()
+
+            if self._df_global.empty:
+                messagebox.showwarning(
+                    "Advertencia",
+                    "El archivo seleccionado no contiene datos válidos o está vacío.",
+                )
+
+            label_archivo.config(text=f"Archivo datos: {os.path.basename(self.archivo_datos)}")
+            actualizar_proyectos()
+
+            if not hasattr(self, "_df_global") or self._df_global.empty:
+                self.archivo_datos = anterior
+                self._df_global = self._leer_archivo_datos()
+                actualizar_proyectos()
+
+        frame_buscar = ttk.Frame(modal)
+        frame_buscar.pack(fill="x", padx=10, pady=4)
+        ttk.Button(frame_buscar, text="Buscar archivo...", command=buscar_archivo).pack(side=tk.LEFT)
+
         ttk.Label(modal, text="Proyecto existente:").pack(anchor="w", padx=10, pady=4)
-        combo = ttk.Combobox(modal, values=proyectos, width=35, state="readonly" if proyectos else "normal")
+        combo = ttk.Combobox(modal, width=35)
         combo.pack(padx=10, pady=4)
-        if proyectos:
-            combo.set(proyectos[0])
 
         ttk.Label(modal, text="O crear uno nuevo:").pack(anchor="w", padx=10, pady=4)
         entry_new = ttk.Entry(modal, width=37)
         entry_new.pack(padx=10, pady=4)
+
+        actualizar_proyectos()
 
         def aceptar():
             elegido = entry_new.get().strip() or combo.get().strip()
@@ -1166,6 +1204,9 @@ class GestorGastos:
                 self._mostrar_error("Debes seleccionar o crear un proyecto.")
                 return
             self.proyecto = elegido
+            if hasattr(self, "content_frame"):
+                self._cargar_datos_proyecto()
+                self._refrescar_tabla()
             modal.destroy()
 
         ttk.Button(modal, text="Aceptar", style="Primary.TButton", command=aceptar).pack(pady=8)
