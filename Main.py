@@ -144,6 +144,7 @@ class GestorGastos:
         self.registro_en_edicion: Optional[int] = None
         self.proyecto: str = ""
         self.mostrar_solo_mano: bool = False
+        self.tabla: Optional[ttk.Treeview] = None
 
         self.root = tk.Tk()
         self.root.title("Control de Gastos - Terra Caliza")
@@ -610,6 +611,9 @@ class GestorGastos:
     # ============================================
 
     def _refrescar_tabla(self, registros=None) -> None:
+        if self.tabla is None:
+            return
+
         registros = registros if registros is not None else self.registros
         registros = self._filtrar_por_modo(registros)
 
