@@ -145,7 +145,6 @@ class GestorGastos:
         self.proyecto: str = ""
         self.mostrar_solo_mano: bool = False
         self.tabla: Optional[ttk.Treeview] = None
-        self.archivo_datos: str = ARCHIVO_DATOS
 
         self.root = tk.Tk()
         self.root.title("Control de Gastos - Terra Caliza")
@@ -413,6 +412,9 @@ class GestorGastos:
                 label.grid_remove()
                 entry.grid_remove()
 
+        if self.tabla is not None:
+            self._refrescar_tabla()
+
         self._refrescar_tabla()
 
     # ============================================
@@ -628,6 +630,11 @@ class GestorGastos:
             return [r for r in registros if r.tipo == "Mano de obra"]
         return registros
 
+    def _filtrar_por_modo(self, registros: List[RegistroGasto]) -> List[RegistroGasto]:
+        if self.mostrar_solo_mano:
+            return [r for r in registros if r.tipo == "Mano de obra"]
+        return registros
+
     def _actualizar_resumen(self, registros) -> None:
         total_bs = sum(r.precio_con_iva_bs * (r.cantidad if r.cantidad else 1) for r in registros)
 
@@ -717,7 +724,7 @@ class GestorGastos:
             df_final = df_nuevo
 
         try:
-            df_final.to_excel(self.archivo_datos, index=False)
+            df_final.to_excel(ARCHIVO_DATOS, index=False)
             self._df_global = df_final
         except Exception as e:
             self._mostrar_error(f"No se pudo guardar el archivo: {e}")
@@ -737,21 +744,16 @@ class GestorGastos:
             raise ValueError(f"Fecha inválida: {fecha_ddmmyyyy}. Usa formato DD/MM/YYYY.")
 
     def _extraer_usd_de_json(self, data: dict) -> float:
-        def _parse_usd(valor) -> float:
-            if isinstance(valor, str):
-                valor = valor.replace(",", ".")
-            return float(valor)
-
         if isinstance(data, dict):
             if isinstance(data.get("rates"), dict) and "USD" in data["rates"]:
                 try:
-                    return _parse_usd(data["rates"]["USD"])
+                    return float(data["rates"]["USD"])
                 except (TypeError, ValueError) as exc:
                     raise ValueError(f"Valor USD inválido en la respuesta del BCV: {exc}")
 
             if "USD" in data:
                 try:
-                    return _parse_usd(data["USD"])
+                    return float(data["USD"])
                 except (TypeError, ValueError) as exc:
                     raise ValueError(f"Valor USD inválido en la respuesta del BCV: {exc}")
 
@@ -759,15 +761,7 @@ class GestorGastos:
                 data_section = data["data"]
                 if isinstance(data_section.get("rates"), dict) and "USD" in data_section["rates"]:
                     try:
-                        return _parse_usd(data_section["rates"]["USD"])
-                    except (TypeError, ValueError) as exc:
-                        raise ValueError(f"Valor USD inválido en la respuesta del BCV: {exc}")
-
-            if isinstance(data.get("monitors"), dict):
-                monitor_usd = data.get("monitors", {}).get("usd", {})
-                if isinstance(monitor_usd, dict) and "price" in monitor_usd:
-                    try:
-                        return _parse_usd(monitor_usd["price"])
+                        return float(data_section["rates"]["USD"])
                     except (TypeError, ValueError) as exc:
                         raise ValueError(f"Valor USD inválido en la respuesta del BCV: {exc}")
 
