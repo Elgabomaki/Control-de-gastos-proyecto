@@ -22,6 +22,8 @@ from dataclasses import dataclass, asdict
 from tkinter import filedialog, messagebox, ttk
 from typing import List, Optional
 
+import requests
+
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -142,6 +144,8 @@ class GestorGastos:
         self.registro_en_edicion: Optional[int] = None
         self.proyecto: str = ""
         self.mostrar_solo_mano: bool = False
+        self.tabla: Optional[ttk.Treeview] = None
+        self.archivo_datos: str = ARCHIVO_DATOS
 
         self.root = tk.Tk()
         self.root.title("Control de Gastos - Terra Caliza")
@@ -232,12 +236,19 @@ class GestorGastos:
         self.entry_fecha_dolar = ttk.Entry(frame, width=14)
         self.entry_fecha_dolar.pack(side=tk.LEFT)
 
+        if not self.entry_fecha_dolar.get().strip():
+            self.entry_fecha_dolar.insert(0, dt.datetime.now().strftime("%d/%m/%Y"))
+
         ttk.Label(frame, text="Precio (Bs):").pack(side=tk.LEFT, padx=6)
         self.entry_dolar = ttk.Entry(frame, width=12)
         self.entry_dolar.pack(side=tk.LEFT)
 
         ttk.Button(frame, text="Actualizar", style="Primary.TButton", command=self._set_dolar).pack(
             side=tk.LEFT, padx=6
+        )
+        ttk.Button(frame, text="BCV Hoy", command=self._obtener_dolar_bcv_hoy).pack(side=tk.LEFT, padx=4)
+        ttk.Button(frame, text="BCV por fecha", command=self._obtener_dolar_bcv_por_fecha).pack(
+            side=tk.LEFT, padx=4
         )
 
         self.label_proyecto = ttk.Label(frame, text=f"Proyecto: {self.proyecto}", style="Header.TLabel")
@@ -598,6 +609,9 @@ class GestorGastos:
     # ============================================
 
     def _refrescar_tabla(self, registros=None) -> None:
+        if self.tabla is None:
+            return
+
         registros = registros if registros is not None else self.registros
         registros = self._filtrar_por_modo(registros)
 
@@ -629,11 +643,11 @@ class GestorGastos:
     # ============================================
 
     def _leer_archivo_datos(self) -> pd.DataFrame:
-        if not os.path.exists(ARCHIVO_DATOS):
+        if not os.path.exists(self.archivo_datos):
             return pd.DataFrame()
         try:
-            return pd.read_excel(ARCHIVO_DATOS)
-        except:
+            return pd.read_excel(self.archivo_datos)
+        except Exception:
             return pd.DataFrame()
 
     def _leer_dolar_por_fecha(self) -> dict[str, float]:
@@ -703,7 +717,7 @@ class GestorGastos:
             df_final = df_nuevo
 
         try:
-            df_final.to_excel(ARCHIVO_DATOS, index=False)
+            df_final.to_excel(self.archivo_datos, index=False)
             self._df_global = df_final
         except Exception as e:
             self._mostrar_error(f"No se pudo guardar el archivo: {e}")
@@ -714,6 +728,83 @@ class GestorGastos:
                 json.dump(self.dolar_por_fecha, f, ensure_ascii=False, indent=2)
         except Exception as e:
             self._mostrar_error(f"No se pudo guardar el historial del dólar: {e}")
+
+    def _fecha_ddmmyyyy_a_yyyymmdd(self, fecha_ddmmyyyy: str) -> str:
+        try:
+            fecha = dt.datetime.strptime(fecha_ddmmyyyy.strip(), "%d/%m/%Y")
+            return fecha.strftime("%Y-%m-%d")
+        except ValueError:
+            raise ValueError(f"Fecha inválida: {fecha_ddmmyyyy}. Usa formato DD/MM/YYYY.")
+
+    def _extraer_usd_de_json(self, data: dict) -> float:
+        def _parse_usd(valor) -> float:
+            if isinstance(valor, str):
+                valor = valor.replace(",", ".")
+            return float(valor)
+
+        if isinstance(data, dict):
+            if isinstance(data.get("rates"), dict) and "USD" in data["rates"]:
+                try:
+                    return _parse_usd(data["rates"]["USD"])
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"Valor USD inválido en la respuesta del BCV: {exc}")
+
+            if "USD" in data:
+                try:
+                    return _parse_usd(data["USD"])
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"Valor USD inválido en la respuesta del BCV: {exc}")
+
+            if isinstance(data.get("data"), dict):
+                data_section = data["data"]
+                if isinstance(data_section.get("rates"), dict) and "USD" in data_section["rates"]:
+                    try:
+                        return _parse_usd(data_section["rates"]["USD"])
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(f"Valor USD inválido en la respuesta del BCV: {exc}")
+
+            if isinstance(data.get("monitors"), dict):
+                monitor_usd = data.get("monitors", {}).get("usd", {})
+                if isinstance(monitor_usd, dict) and "price" in monitor_usd:
+                    try:
+                        return _parse_usd(monitor_usd["price"])
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(f"Valor USD inválido en la respuesta del BCV: {exc}")
+
+        raise KeyError("No se encontró la tasa USD en la respuesta del BCV.")
+
+    def _obtener_dolar_bcv_hoy(self) -> None:
+        try:
+            response = requests.get("https://bcv-api.rafnixg.dev/rates/", timeout=10)
+            response.raise_for_status()
+            usd = self._extraer_usd_de_json(response.json())
+
+            fecha_hoy = dt.datetime.now().strftime("%d/%m/%Y")
+            self.entry_fecha_dolar.delete(0, tk.END)
+            self.entry_fecha_dolar.insert(0, fecha_hoy)
+
+            self.entry_dolar.delete(0, tk.END)
+            self.entry_dolar.insert(0, str(usd))
+
+            self._set_dolar()
+        except Exception as exc:
+            messagebox.showwarning("Advertencia", f"No se pudo obtener el dólar BCV: {exc}")
+
+    def _obtener_dolar_bcv_por_fecha(self) -> None:
+        fecha_texto = self.entry_fecha_dolar.get().strip()
+
+        try:
+            fecha_formateada = self._fecha_ddmmyyyy_a_yyyymmdd(fecha_texto)
+            response = requests.get(f"https://bcv-api.rafnixg.dev/rates/{fecha_formateada}", timeout=10)
+            response.raise_for_status()
+            usd = self._extraer_usd_de_json(response.json())
+
+            self.entry_dolar.delete(0, tk.END)
+            self.entry_dolar.insert(0, str(usd))
+
+            self._set_dolar()
+        except Exception as exc:
+            messagebox.showwarning("Advertencia", f"No se pudo obtener el dólar BCV: {exc}")
 
     def _set_dolar(self) -> None:
         fecha_texto = self.entry_fecha_dolar.get().strip()
@@ -1055,25 +1146,63 @@ class GestorGastos:
     # ============================================
 
     def _seleccionar_proyecto_modal(self) -> None:
-        proyectos = []
-        if hasattr(self, "_df_global") and not self._df_global.empty and "Proyecto" in self._df_global.columns:
-            proyectos = sorted(self._df_global["Proyecto"].dropna().unique().tolist())
-
         modal = tk.Toplevel(self.root)
         modal.title("Seleccionar proyecto")
-        modal.geometry("360x150")
+        modal.geometry("420x220")
         modal.transient(self.root)
         modal.grab_set()
 
+        label_archivo = ttk.Label(modal, text=f"Archivo datos: {os.path.basename(self.archivo_datos)}")
+        label_archivo.pack(anchor="w", padx=10, pady=(8, 4))
+
+        def actualizar_proyectos() -> None:
+            proyectos_local: list[str] = []
+            if hasattr(self, "_df_global") and not self._df_global.empty and "Proyecto" in self._df_global.columns:
+                proyectos_local = sorted(self._df_global["Proyecto"].dropna().unique().tolist())
+            combo.config(values=proyectos_local, state="readonly" if proyectos_local else "normal")
+            if proyectos_local:
+                combo.set(proyectos_local[0])
+            else:
+                combo.set("")
+
+        def buscar_archivo() -> None:
+            archivo = filedialog.askopenfilename(
+                title="Seleccionar archivo de datos",
+                filetypes=[("Excel", "*.xlsx"), ("Todos", "*.*")],
+            )
+            if not archivo:
+                return
+            anterior = self.archivo_datos
+            self.archivo_datos = archivo
+            self._df_global = self._leer_archivo_datos()
+
+            if self._df_global.empty:
+                messagebox.showwarning(
+                    "Advertencia",
+                    "El archivo seleccionado no contiene datos válidos o está vacío.",
+                )
+
+            label_archivo.config(text=f"Archivo datos: {os.path.basename(self.archivo_datos)}")
+            actualizar_proyectos()
+
+            if not hasattr(self, "_df_global") or self._df_global.empty:
+                self.archivo_datos = anterior
+                self._df_global = self._leer_archivo_datos()
+                actualizar_proyectos()
+
+        frame_buscar = ttk.Frame(modal)
+        frame_buscar.pack(fill="x", padx=10, pady=4)
+        ttk.Button(frame_buscar, text="Buscar archivo...", command=buscar_archivo).pack(side=tk.LEFT)
+
         ttk.Label(modal, text="Proyecto existente:").pack(anchor="w", padx=10, pady=4)
-        combo = ttk.Combobox(modal, values=proyectos, width=35, state="readonly" if proyectos else "normal")
+        combo = ttk.Combobox(modal, width=35)
         combo.pack(padx=10, pady=4)
-        if proyectos:
-            combo.set(proyectos[0])
 
         ttk.Label(modal, text="O crear uno nuevo:").pack(anchor="w", padx=10, pady=4)
         entry_new = ttk.Entry(modal, width=37)
         entry_new.pack(padx=10, pady=4)
+
+        actualizar_proyectos()
 
         def aceptar():
             elegido = entry_new.get().strip() or combo.get().strip()
@@ -1081,6 +1210,9 @@ class GestorGastos:
                 self._mostrar_error("Debes seleccionar o crear un proyecto.")
                 return
             self.proyecto = elegido
+            if hasattr(self, "content_frame"):
+                self._cargar_datos_proyecto()
+                self._refrescar_tabla()
             modal.destroy()
 
         ttk.Button(modal, text="Aceptar", style="Primary.TButton", command=aceptar).pack(pady=8)
