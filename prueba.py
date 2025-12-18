@@ -993,10 +993,25 @@ class GestorGastos:
                 c.alignment = Alignment(horizontal="center")
 
         # ------------------- TOTALES -------------------
-        total_sin_iva_bs = sum(r.precio_sin_iva_bs * (r.cantidad if r.cantidad else 1) for r in registros_filtrados)
-        total_con_iva_bs = sum(r.precio_con_iva_bs * (r.cantidad if r.cantidad else 1) for r in registros_filtrados)
+        def _cantidad(registro: RegistroGasto) -> float:
+            return registro.cantidad if registro.cantidad else 1
 
-        total_con_iva_usd = round(total_con_iva_bs / self.precio_dolar, 2) if self.precio_dolar else 0
+        total_sin_iva_bs = sum(r.precio_sin_iva_bs * _cantidad(r) for r in registros_filtrados)
+        total_con_iva_bs = sum(r.precio_con_iva_bs * _cantidad(r) for r in registros_filtrados)
+
+        total_con_iva_usd = 0.0
+        for r in registros_filtrados:
+            if r.tipo == "Mano de obra":
+                total_con_iva_usd += (r.monto_manoobra_usd + r.gastos_extras_usd) * _cantidad(r)
+                continue
+
+            if r.precio_con_iva_usd:
+                total_con_iva_usd += r.precio_con_iva_usd * _cantidad(r)
+            elif r.precio_con_iva_bs:
+                precio_dolar = r.precio_dolar_bs or self.precio_dolar or 1
+                total_con_iva_usd += (r.precio_con_iva_bs / precio_dolar) * _cantidad(r)
+
+        total_con_iva_usd = round(total_con_iva_usd, 2)
 
         fila_total = header_row + len(registros_filtrados) + 2
 
@@ -1009,17 +1024,20 @@ class GestorGastos:
         ws.cell(row=fila_total + 2, column=1, value="TOTAL CON IVA (Bs):")
         ws.cell(row=fila_total + 2, column=2, value=round(total_con_iva_bs, 2))
 
+        ws.cell(row=fila_total + 3, column=1, value="TOTAL CON IVA ($):")
+        ws.cell(row=fila_total + 3, column=2, value=total_con_iva_usd)
+
         utilidad = round(presupuesto - total_con_iva_usd, 2)
         porc = (utilidad / presupuesto * 100) if presupuesto else 0
 
-        ws.cell(row=fila_total + 3, column=1, value="UTILIDAD ($):")
-        ws.cell(row=fila_total + 3, column=2, value=utilidad)
+        ws.cell(row=fila_total + 4, column=1, value="UTILIDAD ($):")
+        ws.cell(row=fila_total + 4, column=2, value=utilidad)
 
-        ws.cell(row=fila_total + 4, column=1, value="% UTILIDAD:")
-        ws.cell(row=fila_total + 4, column=2, value=round(porc, 2))
+        ws.cell(row=fila_total + 5, column=1, value="% UTILIDAD:")
+        ws.cell(row=fila_total + 5, column=2, value=round(porc, 2))
 
         # Colorear totales
-        for i in range(fila_total, fila_total + 5):
+        for i in range(fila_total, fila_total + 6):
             for j in range(1, 3):
                 c = ws.cell(row=i, column=j)
                 c.fill = PatternFill(start_color="FFF59D", end_color="FFF59D", fill_type="solid")
