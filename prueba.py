@@ -383,14 +383,16 @@ class GestorGastos:
         modo = self.combo_modo.get()
         es_mano = modo == "Mano de obra"
 
-        # Factura: ocultar si es mano de obra
+        # Factura: ocultar y deshabilitar si es mano de obra
         for label, entry in zip(self.labels_factura_widgets, self.entries_factura):
             if es_mano:
                 label.grid_remove()
                 entry.grid_remove()
+                entry.state(["disabled"])
             else:
                 label.grid()
                 entry.grid()
+                entry.state(["!disabled"])
 
         # Mano de obra: ocultar si es factura
         for label, entry in zip(
@@ -400,9 +402,48 @@ class GestorGastos:
             if es_mano:
                 label.grid()
                 entry.grid()
+                entry.state(["!disabled"])
             else:
                 label.grid_remove()
                 entry.grid_remove()
+                entry.state(["disabled"])
+
+        if es_mano:
+            self._prefill_mano_obra_desde_data()
+
+    def _prefill_mano_obra_desde_data(self) -> None:
+        """Carga los montos de mano de obra desde la data guardada."""
+
+        if self.registro_en_edicion is not None:
+            return
+
+        if self._df_global.empty or "Tipo" not in self._df_global.columns:
+            return
+
+        df_proj = self._df_global
+        if "Proyecto" in df_proj.columns:
+            df_proj = df_proj[df_proj["Proyecto"] == self.proyecto]
+
+        df_mano = df_proj[df_proj["Tipo"] == "Mano de obra"]
+        if df_mano.empty:
+            return
+
+        fila = df_mano.iloc[-1]
+
+        def _valor(columna: str) -> str:
+            valor = fila.get(columna, "")
+            if pd.isna(valor):
+                return ""
+            return str(valor)
+
+        self.entry_semana.delete(0, tk.END)
+        self.entry_semana.insert(0, _valor("Semana"))
+
+        self.entry_monto_mano_usd.delete(0, tk.END)
+        self.entry_monto_mano_usd.insert(0, _valor("Monto Manoobra ($)"))
+
+        self.entry_gastos_extras_usd.delete(0, tk.END)
+        self.entry_gastos_extras_usd.insert(0, _valor("Gastos extras ($)"))
 
     # ============================================
     #             CONTROLES DE TABLA
@@ -752,33 +793,35 @@ class GestorGastos:
 
     def _agregar_o_actualizar(self) -> None:
         modo = self.combo_modo.get()
-
-        if not self.entry_desc.get().strip():
-            self._mostrar_error("La descripción es obligatoria.")
-            return
-
-        fecha_texto = self.entry_fecha.get().strip()
-        if fecha_texto and not self._validar_fecha(fecha_texto):
-            self._mostrar_error("Formato de fecha inválido. Use DD/MM/YYYY")
-            return
-
-        precio_dolar_fecha = self.dolar_por_fecha.get(fecha_texto)
-        if modo == "Factura" and not fecha_texto:
-            self._mostrar_error("La fecha es obligatoria para facturas.")
-            return
-
-        if modo == "Factura" and precio_dolar_fecha is None:
-            self._mostrar_error("No hay un precio del dólar guardado para esa fecha. Ingrésalo en la sección superior.")
-            return
+        descripcion = self.entry_desc.get().strip()
+        fecha_texto = ""
+        precio_dolar_fecha = None
 
         if modo == "Factura":
+            fecha_texto = self.entry_fecha.get().strip()
+
+            if not descripcion:
+                self._mostrar_error("La descripción es obligatoria.")
+                return
+
+            if fecha_texto and not self._validar_fecha(fecha_texto):
+                self._mostrar_error("Formato de fecha inválido. Use DD/MM/YYYY")
+                return
+
+            precio_dolar_fecha = self.dolar_por_fecha.get(fecha_texto)
+            if not fecha_texto:
+                self._mostrar_error("La fecha es obligatoria para facturas.")
+                return
+            if precio_dolar_fecha is None:
+                self._mostrar_error("No hay un precio del dólar guardado para esa fecha. Ingrésalo en la sección superior.")
+                return
+
             campos = [
                 self.entry_factura,
                 self.entry_unidad,
                 self.entry_cantidad,
                 self.entry_precio_sin_iva,
                 self.entry_precio_con_iva,
-                self.entry_fecha,
                 self.entry_proveedor,
             ]
 
@@ -793,7 +836,6 @@ class GestorGastos:
             except ValueError:
                 self._mostrar_error("Verifica números (cantidad/precios).")
                 return
-
             precio_sin_usd = round(precio_sin / precio_dolar_fecha, 2) if precio_dolar_fecha else 0.0
             precio_con_usd = round(precio_con / precio_dolar_fecha, 2) if precio_dolar_fecha else 0.0
             total_sin = round(precio_sin * cantidad, 2)
@@ -802,7 +844,7 @@ class GestorGastos:
                 item=len(self.registros) + 1,
                 tipo="Factura",
                 factura=self.entry_factura.get(),
-                descripcion=self.entry_desc.get(),
+                descripcion=descripcion,
                 unidad=self.entry_unidad.get(),
                 cantidad=cantidad,
                 precio_sin_iva_bs=precio_sin,
@@ -830,10 +872,10 @@ class GestorGastos:
             registro = RegistroGasto(
                 item=len(self.registros) + 1,
                 tipo="Mano de obra",
-                factura=self.entry_factura.get(),
-                descripcion=self.entry_desc.get(),
-                unidad=self.entry_unidad.get(),
-                cantidad=float(self.entry_cantidad.get() or 0),
+                factura="",
+                descripcion=descripcion,
+                unidad="",
+                cantidad=1.0,
                 precio_sin_iva_bs=0,
                 precio_con_iva_bs=0,
                 precio_sin_iva_usd=0,
@@ -841,7 +883,7 @@ class GestorGastos:
                 fecha=fecha_texto,
                 precio_dolar_bs=0.0,
                 total_sin_iva=0,
-                proveedor=self.entry_proveedor.get(),
+                proveedor="",
                 proyecto=self.proyecto,
                 semana=self.entry_semana.get(),
                 monto_manoobra_usd=monto_mano,
@@ -968,19 +1010,25 @@ class GestorGastos:
         if not archivo:
             return
 
+        columnas_export = (
+            ["Item", "Tipo", "Descripción", "Semana", "Monto Manoobra ($)", "Gastos extras ($)"]
+            if tipo == "Mano de obra"
+            else COLUMNAS
+        )
+
         wb = Workbook()
         ws = wb.active
 
         # ------------------- TÍTULO -------------------
         titulo = f"REPORTE DE GASTOS - {self.proyecto} - {tipo.upper()}"
-        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(COLUMNAS))
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(columnas_export))
         cell = ws.cell(row=1, column=1, value=titulo)
         cell.font = Font(size=16, bold=True)
         cell.alignment = Alignment(horizontal="center")
 
         # ------------------- ENCABEZADOS -------------------
         header_row = 3
-        for col_idx, encabezado in enumerate(COLUMNAS, start=1):
+        for col_idx, encabezado in enumerate(columnas_export, start=1):
             c = ws.cell(row=header_row, column=col_idx, value=encabezado)
             c.fill = PatternFill(start_color="000000", end_color="000000", fill_type="solid")
             c.font = Font(bold=True, color="FFFFFF")
@@ -988,7 +1036,19 @@ class GestorGastos:
 
         # ------------------- FILAS -------------------
         for row_idx, registro in enumerate(registros_filtrados, start=header_row + 1):
-            for col_idx, valor in enumerate(registro.to_row(), start=1):
+            if tipo == "Mano de obra":
+                valores = [
+                    registro.item,
+                    registro.tipo,
+                    registro.descripcion,
+                    registro.semana,
+                    registro.monto_manoobra_usd,
+                    registro.gastos_extras_usd,
+                ]
+            else:
+                valores = registro.to_row()
+
+            for col_idx, valor in enumerate(valores, start=1):
                 c = ws.cell(row=row_idx, column=col_idx, value=valor)
                 c.alignment = Alignment(horizontal="center")
 
@@ -996,22 +1056,25 @@ class GestorGastos:
         def _cantidad(registro: RegistroGasto) -> float:
             return registro.cantidad if registro.cantidad else 1
 
-        total_sin_iva_bs = sum(r.precio_sin_iva_bs * _cantidad(r) for r in registros_filtrados)
-        total_con_iva_bs = sum(r.precio_con_iva_bs * _cantidad(r) for r in registros_filtrados)
+        if tipo == "Mano de obra":
+            total_sin_iva_bs = 0.0
+            total_con_iva_bs = 0.0
+            total_con_iva_usd = round(
+                sum((r.monto_manoobra_usd + r.gastos_extras_usd) * _cantidad(r) for r in registros_filtrados), 2
+            )
+        else:
+            total_sin_iva_bs = sum(r.precio_sin_iva_bs * _cantidad(r) for r in registros_filtrados)
+            total_con_iva_bs = sum(r.precio_con_iva_bs * _cantidad(r) for r in registros_filtrados)
 
-        total_con_iva_usd = 0.0
-        for r in registros_filtrados:
-            if r.tipo == "Mano de obra":
-                total_con_iva_usd += (r.monto_manoobra_usd + r.gastos_extras_usd) * _cantidad(r)
-                continue
+            total_con_iva_usd = 0.0
+            for r in registros_filtrados:
+                if r.precio_con_iva_usd:
+                    total_con_iva_usd += r.precio_con_iva_usd * _cantidad(r)
+                elif r.precio_con_iva_bs:
+                    precio_dolar = r.precio_dolar_bs or self.precio_dolar or 1
+                    total_con_iva_usd += (r.precio_con_iva_bs / precio_dolar) * _cantidad(r)
 
-            if r.precio_con_iva_usd:
-                total_con_iva_usd += r.precio_con_iva_usd * _cantidad(r)
-            elif r.precio_con_iva_bs:
-                precio_dolar = r.precio_dolar_bs or self.precio_dolar or 1
-                total_con_iva_usd += (r.precio_con_iva_bs / precio_dolar) * _cantidad(r)
-
-        total_con_iva_usd = round(total_con_iva_usd, 2)
+            total_con_iva_usd = round(total_con_iva_usd, 2)
 
         fila_total = header_row + len(registros_filtrados) + 2
 
